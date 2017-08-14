@@ -1,0 +1,7 @@
+
+
+
+
+
+(defpackage #:lispydata
+  (:use #:cl ))
