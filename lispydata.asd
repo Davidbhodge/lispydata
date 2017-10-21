@@ -9,11 +9,13 @@
 		#:alexandria
 		#:trivial-download
 		#:quri
+		#:zip
 		#:chipz
 		#:archive
 		#:fare-csv
 		#:data-format-validation
 		#:cl-data-frame
+		#:cl-json
 		)
   :components ((:file "package")
                (:file "lispydata")

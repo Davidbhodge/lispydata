@@ -8,13 +8,13 @@
 
 (in-package :lispydata/fetch)
 ;;
-;; The summary: . The type of the download is governened by the URL scheme (HTTP(S), FTP, FILE) and decompression (where necessary) is inferred from the file suffix. Currently gzip, bzip, .Z  .tar and .tar.gz  are supported
+;; The summary: The type of the download is governed by the URL scheme (HTTP(S), FTP, FILE) and decompression (where necessary) is inferred from the file suffix. Currently gzip, .Z  .tar and .tar.gz  are supported
 
 
 
 
 (eval-when (:execute :load-toplevel :compile-toplevel)
-  (defparameter *lispydata-home* "/tmp/lispydata/"
+  (defparameter *lispydata-home* "~/lispydata/"
     "The default destination for transferring files")
   (uiop:ensure-all-directories-exist (list *lispydata-home*)))
 
@@ -24,80 +24,23 @@
 ;; Usually this will default to  *lispydata-home*.
 
 (defclass remote-file ()
-  ((URI                   :accessor get-URI                  :initarg :URI)
-   (name                  :accessor get-name                 :initarg :name)
-   (host                  :accessor get-host                 :initarg :host)
-   (archive-type          :accessor get-archive-type         :initarg :archive-type)
-   (file-type             :accessor get-file-type            :initarg :file-type)
-   (protocol              :accessor get-protocol             :initarg :protocol)
-   (destination-directory :accessor get-destination          :initarg :destination-directory)
-   (destination-pathname  :accessor get-destination-pathname :initarg :destination-pathname)))
-
-(defun make-remote-file (file)
-  (let* ((uri (quri:uri file))
-	 (protocol (quri:uri-scheme uri))
-	 (name (%uri-file uri))
-	 (archive-type (%archive-protocol name))
-	 (hostname (quri:uri-host uri))
-	 (destination-pathname (trim-archive-suffix
-				(concatenate 'string
-					     *lispydata-home*
-					     hostname
-					     (quri:uri-path uri))
-				archive-type)))
-    
-    (uiop:ensure-all-directories-exist (list destination-pathname))
-    
-    (make-instance 'remote-file
-		   :URI uri
-		   :name name
-		   :protocol (%protocol protocol)
-		   :host hostname
-		   :archive-type archive-type
-		   :file-type (%infer-file-type name)
-		   :destination-directory  *lispydata-home*
-		   :destination-pathname destination-pathname)))
-
-(defun trim-archive-suffix (name archive-type)
-  (let ((suffix (cdr (assoc archive-type '( (:gzip . ".gz")
-					   (:z . ".Z")
-					   (:tar . ".tar")
-					   (:tarball . ".tar.gz")
-					   (:zip . ".zip")
-					   (:bzip . ".bz2"))))))
-    (if suffix
-	(subseq name 0 (- (length name) (length suffix)))
-	name)))
-
-
-;;  
-(defgeneric %fetch (file protocol)
-  (:documentation "fetch the file from a remote host using the appropriate protocol")
-  (:method ((file remote-file)   (protocol (eql :FTP)))
-	  (%ftp-retrieve file))
-  (:method ((file remote-file) (protocol ( eql :HTTP)))
-	  (let* ((filename (quri:render-uri (get-uri file))))
-	    (trivial-download:download filename (get-destination-pathname file))))
-  (:method ((file remote-file) (protocol (eql :file)))
-	  (uiop:copy-file (get-name file) (get-destination-pathname file))))
-
-
-
-(defun %ftp-retrieve (file &key (port 21) (username "anonymous") (password "lispydata"))
-  "This taken from the example cl-ftp client."
-  
-  (ftp.client:with-ftp-connection (conn :hostname (get-host file) 
-			     :port port
-			     :username username
-			     :password password
-			     :passive-ftp-p t)
-    (ftp.client:send-cwd-command conn (%uri-path-only (get-uri file)))
-    (ftp.client:retrieve-file conn (get-name file)
-		   (get-destination-pathname file)
-		   :type :binary :if-exists :supersede)))
+  ((URI                   :accessor get-URI                   :initarg :URI                   :documentation "The full URI of the remote file")
+   (name                  :accessor get-name                  :initarg :name                  :documentation "the file name only ")
+   (host                  :accessor get-host                  :initarg :host                  :documentation "the hostname of the remote file")
+   (archive-type          :accessor get-archive-type          :initarg :archive-type          :documentation "classifies the type of archive if any")
+   (archive-filename      :accessor get-archive-filename      :initarg :archive-filename      :documentation "the name of the file we download, prior to any processing")
+   
+   (archive-member        :accessor get-archive-member        :initarg :archive-member        :documentation "specifies the member file of the archive to extract")
+   (file-type             :accessor get-file-type             :initarg :file-type             :documentation "is the file a csv, or other")
+   (protocol              :accessor get-protocol              :initarg :protocol              :documentation "HTTP,HTTPS,FTP or File")
+   (destination-directory :accessor get-destination-directory :initarg :destination-directory :documentation "The output directory")
+   (destination-pathname  :accessor get-destination-pathname  :initarg :destination-pathname  :documentation "the fully qualified name of the final output file")))
+;;
+;; utilities for class initialisations
+;;
 
 (defun %infer-file-type (name-string)
-  "return the file type(s) of the file designated by name-string. The order of this is important in the case of things like tar.gz."
+  "return the file type(s) of the file designated by name-string. The order of this is important in the case of things like tar.gz as this drives the decompression process"
   (loop  
      for (name  type) = (multiple-value-list (uiop:split-name-type name-string))  
      until  (equal  type :unspecific)
@@ -145,15 +88,150 @@
     ((string= str "file") :file)
     (t nil)))
 
-;;
+(defun trim-archive-suffix (name archive-type)
+  (let ((suffix (cdr (assoc archive-type '( (:gzip . ".gz")
+					   (:z . ".Z")
+					   (:tar . ".tar")
+					   (:tarball . ".tar.gz")
+					   (:zip . ".zip")
+					   (:bzip . ".bz2"))))))
+    (if suffix
+	(subseq name 0 (- (length name) (length suffix)))
+	name)))
 
-(defun  %extract-tarball (file &optional (tar-only nil))
-  "Extract a tarball (.tar.gz) file to a directory (*lispydata-home*). Member files are placed in that directory"
-  (with-open-file (tarball-stream (get-name file)
+(defun make-remote-file (file &key (archive-member nil))
+  "pull part the file name , create the fully qualified output name and make the directories in the the cache. If it a .tar, .zip or .Z file, ensure that we specify a member to extract.
+
+When archive-member is not-nil, treat that as the name of a file contained in the archive and extract that. When archive-member is nil, we will check the contents of the archive and extract the first member found. "
+  (let* ((uri (quri:uri file))
+	 (protocol (quri:uri-scheme uri))
+	 (name (%uri-file uri))
+	 (archive-type (%archive-protocol name))
+	 (hostname (quri:uri-host uri))
+	 (destination-directory (concatenate 'string
+					     *lispydata-home*
+					     hostname
+					     (%uri-path-only uri)
+					     "/"))
+	 (destination-pathname (concatenate 'string destination-directory (trim-archive-suffix name archive-type)))
+	 (archive-filename (concatenate 'string destination-directory name)))
+    ;; (and (member  archive-type '(:tar :tarball :zip))
+    ;;    (null archive-member)
+    ;;    (error "you must specify a member to extract from the archive"))
+    
+    (uiop:ensure-all-directories-exist (list destination-pathname))
+    
+    (make-instance 'remote-file
+		   :URI uri
+		   :name name
+		   :protocol (%protocol protocol)
+		   :host hostname
+		   :archive-type archive-type
+		   :archive-filename archive-filename
+		   :archive-member archive-member
+		   :file-type (%infer-file-type name)
+		   :destination-directory  destination-directory
+		   :destination-pathname destination-pathname)))
+
+;;
+;; ==================================================
+;;
+(defgeneric %fetch (file protocol)
+  (:documentation "fetch the file from a remote host using the appropriate protocol")
+  (:method ((file remote-file)   (protocol (eql :FTP)))
+	  (%ftp-retrieve file))
+  (:method ((file remote-file) (protocol ( eql :HTTP)))
+	  (let ((filename (quri:render-uri (get-uri file))))
+	    (trivial-download:download filename (get-archive-filename file))))
+  (:method ((file remote-file) (protocol (eql :file)))
+    ;; don't copy if the file is already in the cache.
+    (unless (probe-file (get-destination-pathname file))
+      (uiop:copy-file (get-name file) (get-destination-pathname file)))))
+
+
+
+(defun %ftp-retrieve (file &key (port 21) (username "anonymous") (password "lispydata"))
+  "This taken from the example cl-ftp client."
+  
+  (ftp.client:with-ftp-connection (conn :hostname (get-host file) 
+			     :port port
+			     :username username
+			     :password password
+			     :passive-ftp-p t)
+    (ftp.client:send-cwd-command conn (%uri-path-only (get-uri file)))
+    (ftp.client:retrieve-file conn (get-name file)
+		   (get-archive-filename file)
+		   :type :binary :if-exists :supersede)))
+
+
+;;
+;; =================================
+;;
+(defun %ensure-archive-member (file)
+  "if the slot archive-member is nil, then look inside the archive and take the first member"
+  (unless (get-archive-member file)
+    (setf (get-archive-member file)
+	  (cond
+	    ((eql (get-archive-type file) :zip) (first (%list-zip-file-entries file)))
+	    ((eql (get-archive-type file) :tar) (first (%list-archive-entries file)))
+	    (t (error "%ensure-archive-member invalid archive-type ~a~%" (get-archive-type file))))))
+  (get-archive-member file))
+
+(defun %decompress-tar-file (file &optional (tar-only nil))
+  "decompress the file and if a member is specified, extract that member. IF the file is just a tar file, don't decompress "
+  (unless tar-only
+    (%decompress-archive file))
+  
+  (%extract-archive-member file (%ensure-archive-member file)))
+
+
+
+(defgeneric %decompress (file archive-type)
+  (:documentation  "For the remote file 'file' apply processing to decompress the archive and where appropriate extract a member from an archive")
+  (:method ((file remote-file) (archive-type (eql :ignore)))
+    (values))
+  (:method ((file remote-file) (archive-type (eql :tar)))
+    (%decompress-tar-file file t))
+  (:method ((file remote-file) (archive-type (eql :tarball)))
+    (%decompress-tar-file file))
+  (:method ((file remote-file) (archive-type (eql :zip)))
+    (%extract-zipfile-member  file (%ensure-archive-member file)))
+  (:method ((file remote-file) (archive-type (eql :bzip)))
+    (error "Sorry, bzip not implemented as yet"))
+  (:method ((file remote-file) (archive-type (eql :Z )))
+    (%decompress-tar-file file)))
+
+(defun %list-zip-file-entries ( file)
+  (let (entries)
+    (zip:with-zipfile (zip (get-archive-filename file) )
+      (zip:do-zipfile-entries (name entry zip)
+	(unless (search "__MACOSX" name)
+	  (pushnew name entries :test #'string= )) ))
+    entries))
+
+(defun %list-archive-entries (file)
+  (let (entries)
+    (archive:do-archive-entries (entry (get-name  file))
+      (pushnew (archive:name entry) entries :test #'string=))))
+
+(defun %extract-zipfile-member (file member)
+  (format t "extracting member ~a from zip ~a~%" member (get-name file))
+  (zip:with-zipfile (zipfile (get-archive-filename file))
+    (alexandria:if-let (zip-entry (zip:get-zipfile-entry member zipfile))
+      (with-open-file (outfile (get-destination-pathname file)
+			       :direction :output
+			       :element-type '(unsigned-byte 8)
+			       :if-exists :supersede)
+	(zip:zipfile-entry-contents zip-entry outfile))
+      (error "could not find member ~a in zip ~a" member (get-name file)))))
+
+(defun  %decompress-and-extract-tarball (file &optional (tar-only nil))
+  "Decompress  a tarball (.tar.gz) or a .tar file to a directory . Member files are placed in that directory"
+  (with-open-file (tarball-stream (get-archive-filename file)
 				  :direction :input
 				  :element-type '(unsigned-byte 8))
     ;; the only way to tell archive where to put files is by binding default-pathname-defaults
-    (let ((*default-pathname-defaults* (get-destination-pathname file) ))
+    (let ((*default-pathname-defaults* (get-destination-directory file) ))
       (archive::extract-files-from-archive
        (archive:open-archive 'archive:tar-archive
 			     (if tar-only
@@ -161,39 +239,53 @@
 				 (chipz:make-decompressing-stream 'chipz:gzip tarball-stream))
 
 			     :direction :input))))
-  (uiop:delete-file-if-exists (get-name file)))
+  ;(uiop:delete-file-if-exists (get-name file))
+  )
 
 
 (defparameter *archive-methods-alist* '(( :gzip . chipz:gzip)
 					( :zip . chipz:zlib)
 					( :bzip . chipz:bzip2)
-					( :plain . :ignore)))
+					( :plain . :ignore))
+  "Alist that associates the file type with the decompression methods")
+
+
+
 (defun %archive-method-decode (amethod)
   (cdr (assoc amethod *archive-methods-alist*)))
 
+(defun %remove-archive-methods (file-type)
+  (remove-if (lambda (method) (%archive-method-decode method)) file-type))
 
-(defun %extract (file)
-  (case (get-archive-type file)
-    (:ignore t)
-    (:tarball (%extract-tarball file) )
-    (:tar (%extract-tarball file t))
-    (otherwise
-     (with-open-file  (archive-stream (get-name file)
-				      :direction :input
-				      :element-type '(unsigned-byte 8))
-       (with-open-file (stream (get-destination-pathname file)
-			       :direction :output
-			       :element-type '(unsigned-byte 8)
-			       :if-exists :supersede)
-	 (chipz:decompress stream
-			   (%archive-method-decode
-			    (get-archive-type file) )
-			   archive-stream)))
-    (uiop:delete-file-if-exists (get-name file)) )))
+(defun %decompress-archive (file)
+  "turn a .gz , bz2 or  .zip file into its uncompressed equivalent"
+  (with-open-file  (archive-stream (get-archive-filename file)
+				   :direction :input
+				   :element-type '(unsigned-byte 8))
+    (with-open-file (stream (get-destination-pathname file)
+			    :direction :output
+			    :element-type '(unsigned-byte 8)
+			    :if-exists :supersede)
+      (chipz:decompress stream
+			(%archive-method-decode (get-archive-type file) )
+			archive-stream))))
+
+(defun  %extract-archive-member (file member)
+  "Extract a member from a zip or tar file"
+  (let ((*default-pathname-defaults* (get-destination-directory file)))
+    (format t "extracting member ~a from Archive ~a~%" member (get-name file))
+    (archive:with-open-archive (archive (get-archive-filename file))
+      (archive:do-archive-entries (entry archive)
+	(when (string= (archive:name entry) member)
+	  (archive:extract-entry archive entry))))))
 
 
+;;
+;; =====================================================
+;; Dataframe stuff
 
-(defparameter *csv-type-alist* '((number . dfv::number)
+
+(defparameter *field-type-alist* '((number . dfv::number)
 				 (date    . dfv:date)
 				 (category . dfv::string)
 				 (string . dfv::string))
@@ -201,7 +293,7 @@
 
 (defun %process-type (type field)
   "try to guess the type of a field. note the special case of category fields"
-  (let ((dfv-type (cdr (assoc type *csv-type-alist*))))
+  (let ((dfv-type (cdr (assoc type *field-type-alist*))))
     
     (handler-case (dfv:parse-input dfv-type field)
       (dfv:invalid-format(condition) (declare (ignore condition)) nil)
@@ -217,7 +309,7 @@
 
 
   (loop
-     for spec in (mapcar #'car (remove 'category *csv-type-alist* :key #'car))
+     for spec in (mapcar #'car (remove 'category *field-type-alist* :key #'car))
      for type = (%process-type spec field)
      when type do (return type))
   ) ; if we have not found anything, it must be a string. we should never get there though
@@ -241,6 +333,7 @@
     (mapcar #'%infer-column-type line)))
 
 (defun %make-column-vector (type)
+  "this is probably a waste of time"
   (ecase type
     (number (make-array 1000
 			 :fill-pointer 0
@@ -256,32 +349,60 @@
     (category (make-array 1000
 			 :fill-pointer 0
 			 :adjustable t
-			 :element-type 'keyword))))
+			 :element-type 'keyword))
+    (otherwise (make-array 1000
+			 :fill-pointer 0
+			 :adjustable t
+			 :element-type t))))
 
+;;
+;; Missing data. This is quite a difficult topic. What we do at the moment is
+;;   if the field is blank or it matches *missing-data-regexp* then we will return the symbol :na.
+;; This means then basic numeric operations will fail until some recoding work is done.
+;; The regexp is exported, so can be rebound as appropriate for different use cases
+;; 
+(defparameter *missing-data-regexp*  (cl-ppcre:create-scanner  "^\\s*[nN]/?[aA]\\s*$|^\\s*$"))
+
+(defun %missing-data? (field)
+  (cl-ppcre:scan *missing-data-regexp* field))
 
 (defun %parse-input-field (type field)
-  (if (equal type 'category)
-      (alexandria:make-keyword field)
-      (dfv:parse-input  (cdr (assoc type *csv-type-alist*)) field)))
+  
+  (let ((result  (cond
+		   ((%missing-data? field) (list :na t))
+		   ((equal type 'category) (list (alexandria:make-keyword field) nil))
+		   (t (list (dfv:parse-input  (cdr (assoc type *field-type-alist*)) field) nil )))))
+    
+    result))
 
-(defun %process-csv-lines (csv-file column-types columns)
+(defun %process-csv-lines (csv-file column-types columns &key (skip nil))
   " read through the lines in the csv-file and process them"
+  ;; skip blank lines and the header line.
+  (when skip
+    (loop while (%blank-csv-line (fare-csv:read-csv-line csv-file))))
   (loop for line = (fare-csv:read-csv-line csv-file)
-	 until (null line)
-	 do (loop for field in line and
-	       type in column-types and
-	       column in columns do
-		 (vector-push-extend (%parse-input-field type field) column))))
+     until (null line)
+     collect (some #'identity
+		   (let (parsed-field)
+		     (loop 
+			for index below (length line) do
+			  (setf parsed-field (%parse-input-field (nth index column-types) (nth index line))) 
+			  (vector-push-extend (first parsed-field) (nth index columns))
+     
+			collect (second parsed-field))))))
 
-(defun %read-csv-guess-spec (file )
+(Defun %read-csv-guess-spec (file )
   " When its a CSV with column headers use the column headers and then attempt to infer the types of each column."
   (with-open-file ( csv-file (get-destination-pathname file)   :direction :input )
     (let* ((column-names (%collect-column-names-as-keywords csv-file))
 	   (column-types (%infer-column-types csv-file))
-	   (columns (loop for type in column-types  collect (%make-column-vector type))))
-      (%process-csv-lines csv-file column-types columns)
+	   (columns (loop for type in column-types  collect (%make-column-vector type)))
+	   (incomplete-cases  (%process-csv-lines csv-file column-types columns )))
 
-      (dframe:make-df column-names columns ))))
+     
+      (dframe:make-df column-names columns
+			 :column-types column-types
+			 :incomplete-cases incomplete-cases))))
 
 (defun %read-csv-with-spec (file  spec)
   " "
@@ -289,15 +410,14 @@
     (let* ((skip (if (member 'skip spec) (setf spec (remove 'skip spec)) nil))
 	   (column-names (mapcar #'car spec))
 	   (column-types (mapcar #'cdr spec))
-	   (columns (loop for type in column-types  collect (%make-column-vector type))))
-      ;; skip blank lines and the header line.
-      (when skip
-	(loop while (%blank-csv-line (fare-csv:read-csv-line csv-file))))
-      (%process-csv-lines csv-file column-types columns)
+	   (columns (loop for type in column-types  collect (%make-column-vector type)))
+	   (incomplete-cases (%process-csv-lines csv-file column-types columns :skip skip)))
       
-      (dframe:make-df column-names columns ))))
+      (dframe:make-df column-names columns
+		      :column-types column-types
+		      :incomplete-cases incomplete-cases))))
 ;;
-;; a CSV spec is currently an plist of the form '( (:skip | :noheading)  (colname1 . :type) (Colname2 . :type) ....)
+;; a CSV spec is  a plist of the form '( (:skip | :noheading)  (colname1 . :type) (Colname2 . :type) ....)
 ;; where skip means skip existing column headings
 ;;       noheading means don't look for column headings
 ;;       type is one of
@@ -305,7 +425,7 @@
 ;;       date    - a fixnum
 ;;;      category - symbol
 ;;;      string  - string.
-;;; if you don;t use a spec for the csv it does its best to guess types. Categorical values are hard to distinguish from strings - so a simple heuristic is applied. If the CSV field is < 20 long, we guess is a category otherwise its a string.
+;;; if you don;t use a spec for the csv it does its best to guess types. 
 ;; Note: If your file does not have column names, you must use a spec
 ;; Note: we can't guess categorical variables very well. So we don't try . If a column is categorical you have to use a spec to denote it
 
@@ -314,24 +434,124 @@
   (if spec
       (%read-csv-with-spec file spec)
       (%read-csv-guess-spec file)))
+;;
+;; a flat file spec is a superset of a CSV spec. We can't infer field
+;; positions in a flat file so it must be supplied. for is similar to CSV
+;; a list of the form  '(fieldname type length     ) where type is the same as a CSV spec
+;;
 
-(defun %flat-file-to-df (file spec)
-  "apply a spec to parse out the file and turn it into a df"
-  (error "calling flat-file-to-df with ~a~%" file))
+(defun %split-line-at-position (line positions widths)
+  (loop for index below (length positions) 
+      for pos = (pop positions) 
+       for width = (pop widths)
+       collect (subseq line pos (+ pos width)  ))
+  )
+
+(defun %process-flat-lines (flat-file column-types column-widths columns)
+  " read through the lines in the file and process them"
+ 
+  (let ((column-start (let ((start 0))
+			(mapcar (lambda ( next)
+				  (prog1 start
+				    (incf start next))) column-widths))))
+    
+    (loop for line = (read-line flat-file nil nil)
+       until (null line)
+       collect (some #'identity
+		     (let ((parsed-field)
+			   (line (%split-line-at-position line column-start column-widths)))
+		       (loop 
+			  for index below (length line) do
+			    (setf parsed-field (%parse-input-field (nth index column-types) (nth index line))) 
+			    (vector-push-extend (first parsed-field) (nth index columns))
+			    
+			  collect (second parsed-field)))))))
+
+
+
+(defun %flat-file-to-df (file  spec)
+  " "
+  (with-open-file ( flat-file (get-destination-pathname file)  :direction :input )
+    (let* ((skip (if (member 'skip spec) (setf spec (remove 'skip spec)) nil))
+	   (column-names (mapcar #'car spec))
+	   (column-types (mapcar #'cadr spec))
+	   (column-widths (mapcar #'caddr spec ))
+	   
+	   (columns (loop for type in column-types  collect (%make-column-vector type)))
+	   (incomplete-cases (%process-flat-lines flat-file column-types column-widths columns )))
+      
+      (dframe:make-df column-names columns
+		      :column-types column-types
+		      :incomplete-cases incomplete-cases))))
+
+(defparameter *lisp-to-df-types* '(
+				   (BIT . NUMBER)
+				   (SIMPLE-ARRAY . STRING)
+				   (INTEGER . NUMBER)
+				   (FIXNUM . NUMBER)
+				   (FLOAT . NUMBER)
+				   (DOUBLE-FLOAT .  NUMBER)))
+(defun %ensure-list (list)
+  (if (consp list)
+      list
+      (list list)))
+
+(defun %lisp-to-df-type (key obj)
+  (let ((the-type (first (%ensure-list (type-of (cdr (assoc key obj)))))))
+
+        (cdr (assoc the-type *lisp-to-df-types*))))
+
+(defun %infer-json-spec (json-obj)
+  "this is a slack attempt at determining column names and types from an input JSOn file. This assumes that the input file has a very simple, flat structure with no nested objects. It also assumes that all json objects are the same of course. categorical variables will need to be recoded."
+  (let* ((json-names  (mapcar #'car json-obj))
+	 (json-types  (loop for n in json-names collect (%lisp-to-df-type n json-obj))))
+    (mapcar #'list json-names json-types)))
+
+(defun %process-json (json)
+  " "
+  
+  (loop for obj in json 
+     until (null line)
+     collect (some #'identity
+		   (loop 
+		      for field in  obj do
+			 
+			(vector-push-extend (cdr field ) (nth index columns))
+			
+		      collect t)))) ; a hack 
+
+(defun %json-to-df (remote-file)
+  "this is just a proof of concept and will barf pretty quickly on large inputs"
+  (let* ((json (with-open-file (json-file  (get-destination-pathname file)  :direction :input)
+		 (cl-json:decode-json  json-file)))
+	 (json-spec (%infer-json-spec (first json)))
+	 (column-names (mapcar #'first json-spec))
+	 (column-types (mapcar #'second json-spec))
+	 (columns (loop for type in column-types  collect (%make-column-vector type)))
+	   (incomplete-cases (%process-json json  column-types  columns )))
+	 
+    )
+  (dframe:make-df column-names columns
+		      :column-types column-types
+		      :incomplete-cases incomplete-cases)
+    )
 
 (defun %file-to-df (remote-file &optional (spec nil ))
   "convert a file into a dataframe. "
-  (case (first (%infer-file-type (get-name remote-file)))
+  (ecase (first (%remove-archive-methods (%infer-file-type (get-name remote-file))))
     (:csv (%csv-to-df remote-file spec ))
-    (otherwise (error "flat files not implemented"))))
+    (:flat (%flat-file-to-df remote-file spec) )
+    (:json (%json-to-df remote-file))))
 
-(defun fetch (file &key (spec nil) (cache nil))
+(defun fetch (file &key (spec nil) (cache nil) (archive-member nil))
   "fetch a file, unpack it if needed and then if its a csv turn it into a dataframe. If cache non nil, don't do the download"
-  (let ((file-to-fetch (make-remote-file file)))
-    (unless cache
-      (%fetch file-to-fetch (get-protocol file-to-fetch))
-      (%extract file-to-fetch))
-    (%file-to-df file-to-fetch spec)))
+  (unless (stringp file)
+    (error "Fetch: Parameter 'file' must be a string"))
+  (let ((file-to-fetch (make-remote-file file :archive-member archive-member)))
+       (unless cache
+	 (%fetch file-to-fetch (get-protocol file-to-fetch))
+	 (%decompress file-to-fetch (get-archive-type file-to-fetch)))
+       (%file-to-df file-to-fetch spec)))
 
 
 (defun generate-csv-spec (file )

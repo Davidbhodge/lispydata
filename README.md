@@ -4,9 +4,11 @@
 
 Lispydata is an attempt to bring some R like data handling functionality to lisp.
 
-Right now (august 2017)  its in pre-alpha and I would not recommend that you use it for the moment. Not that you can easily , as some of the dependencies are not in Quicklisp as yet. I hope to get the package out of Alpha pretty quickly.
+This is the new, shiny October release.
 
-In this release, the basic dowloading of files, handling of compression and generalinfrastructure has been implemented. 
+Right now   its in pre-alpha and I would not recommend that you use it for the moment. Not that you can easily , as some of the dependencies are not in Quicklisp as yet. I hope to get the package out of Alpha pretty quickly.
+
+In this release, the basic dowloading of files, handling of compression and general infrastructure has been implemented. 
 
 There is minimal (ie no) error checking as yet.
 
@@ -44,7 +46,24 @@ a CSV spec is currently an plist of the form
  Note: we can't guess categorical variables very well. So we don't try . If a column is categorical you have to use a spec to denote it.
 
 ### Flat File Spec ###
-To be completed.
+
+a flat file  spec is currently a plist of the form similar to a CSV. You MUST use a spec
+
+`'(   (colname1 . :type) (Colname2 . :type) ....)
+`
+ where skip means skip existing column headings
+      
+     type is one of
+      * number  - put into a type t vector, this may be coerced into double-floats
+      * date    - a fixnum
+      * category - symbol
+      * string  - string.
+  
+ .
+ 
+### JSON ###
+
+a proof of concept for json. We attempt to infer types from the parsed JSON. 
 
 ## Supported protocols ##
 
@@ -77,4 +96,7 @@ Descriptive stats & graphics
 
  (name to be revised, I think)
 Merging, slicing and dicing
+
+# SAVE #
+dataframe output functions.
 
