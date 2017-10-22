@@ -1,7 +1,8 @@
 (defpackage :lispydata/fetch
   (:use #:cl
 	#:org.mapcar.ftp.client
-	#:data-format-validation)
+	#:data-format-validation
+	#:cl-data-frame)
   (:export #:fetch
 	   #:generate-csv-spec
 	   #:*lispydata-home*))
@@ -119,7 +120,7 @@ When archive-member is not-nil, treat that as the name of a file contained in th
     ;;    (null archive-member)
     ;;    (error "you must specify a member to extract from the archive"))
     
-    (uiop:ensure-all-directories-exist (list destination-pathname))
+    (break) (uiop:ensure-all-directories-exist (list destination-pathname))
     
     (make-instance 'remote-file
 		   :URI uri
@@ -507,14 +508,15 @@ When archive-member is not-nil, treat that as the name of a file contained in th
 	 (json-types  (loop for n in json-names collect (%lisp-to-df-type n json-obj))))
     (mapcar #'list json-names json-types)))
 
-(defun %process-json (json)
+(defun %process-json (json columns)
   " "
   
   (loop for obj in json 
-     until (null line)
+    
      collect (some #'identity
 		   (loop 
-		      for field in  obj do
+		      for field in  obj 
+		      for index from 0 do
 			 
 			(vector-push-extend (cdr field ) (nth index columns))
 			
@@ -522,19 +524,18 @@ When archive-member is not-nil, treat that as the name of a file contained in th
 
 (defun %json-to-df (remote-file)
   "this is just a proof of concept and will barf pretty quickly on large inputs"
-  (let* ((json (with-open-file (json-file  (get-destination-pathname file)  :direction :input)
+  (let* ((json (with-open-file (json-file  (get-destination-pathname remote-file)  :direction :input)
 		 (cl-json:decode-json  json-file)))
 	 (json-spec (%infer-json-spec (first json)))
 	 (column-names (mapcar #'first json-spec))
 	 (column-types (mapcar #'second json-spec))
 	 (columns (loop for type in column-types  collect (%make-column-vector type)))
-	   (incomplete-cases (%process-json json  column-types  columns )))
+	   (incomplete-cases (%process-json json    columns )))
 	 
-    )
-  (dframe:make-df column-names columns
-		      :column-types column-types
-		      :incomplete-cases incomplete-cases)
-    )
+    
+    (dframe:make-df column-names columns
+		    :column-types column-types
+		    :incomplete-cases incomplete-cases)))
 
 (defun %file-to-df (remote-file &optional (spec nil ))
   "convert a file into a dataframe. "
