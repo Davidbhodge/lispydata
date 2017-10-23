@@ -63,7 +63,6 @@
       ((%type-contains file-type :zip) :zip)
       ((%type-contains file-type :bz2 ):bzip)
       (t :ignore))))
-
 (defun %uri-file (uri)
   "return the filename part of the uri"
   (let* ((path (quri:uri-path uri))
@@ -120,7 +119,7 @@ When archive-member is not-nil, treat that as the name of a file contained in th
     ;;    (null archive-member)
     ;;    (error "you must specify a member to extract from the archive"))
     
-    (break) (uiop:ensure-all-directories-exist (list destination-pathname))
+     (uiop:ensure-all-directories-exist (list destination-pathname))
     
     (make-instance 'remote-file
 		   :URI uri
@@ -145,9 +144,8 @@ When archive-member is not-nil, treat that as the name of a file contained in th
 	  (let ((filename (quri:render-uri (get-uri file))))
 	    (trivial-download:download filename (get-archive-filename file))))
   (:method ((file remote-file) (protocol (eql :file)))
-    ;; don't copy if the file is already in the cache.
-    (unless (probe-file (get-destination-pathname file))
-      (uiop:copy-file (get-name file) (get-destination-pathname file)))))
+    
+    (uiop:copy-file (get-name file) (get-destination-pathname file))))
 
 
 
@@ -294,13 +292,15 @@ When archive-member is not-nil, treat that as the name of a file contained in th
 
 (defun %process-type (type field)
   "try to guess the type of a field. note the special case of category fields"
-  (let ((dfv-type (cdr (assoc type *field-type-alist*))))
+  (if (eql field :na)
+      field
+      (let ((dfv-type (cdr (assoc type *field-type-alist*))))
     
-    (handler-case (dfv:parse-input dfv-type field)
-      (dfv:invalid-format(condition) (declare (ignore condition)) nil)
-      (dfv::invalid-number () nil)
-      (:no-error (x) (declare (ignore x))
-		 type))))
+	(handler-case (dfv:parse-input dfv-type field)
+	  (dfv:invalid-format(condition) (declare (ignore condition)) nil)
+	  (dfv::invalid-number () nil)
+	  (:no-error (x) (declare (ignore x))
+		     type)))))
 
 (defun %infer-column-type (field)
   "for the string in field see if its one of
@@ -328,10 +328,20 @@ When archive-member is not-nil, treat that as the name of a file contained in th
 (defun %infer-column-types (csv-file)
   "at the moment just use the first data row as the prototypes for guessing the column types. we might suck in a few more lines if this is not too reliable."
   (let ((original-csv-position (file-position csv-file))
-	(line (loop for csv-line = (fare-csv:read-csv-line csv-file)
-		 unless (%blank-csv-line csv-line) do (return csv-line))))
+	(lines (loop for csv-line = (fare-csv:read-csv-line csv-file)
+		 while csv-line
+		   repeat 10
+		  unless (%blank-csv-line csv-line)
+		  collect  (mapcar #'%infer-column-type csv-line))))
     (file-position  csv-file original-csv-position) ; rewind the file to the first data line
-    (mapcar #'%infer-column-type line)))
+    ;; at this point we have a list of lists each sublist representing a line. We transpose it into columns and then try to assign a reasonable type to the column
+    (loop 
+   for col in (apply #'mapcar #'list lines )
+   collect  (cond
+	      ((member  'NUMBER col) 'NUMBER)
+	      ((member 'STRING col ) 'STRING)
+	      ((member 'Date col) 'DATE)
+	      (t 'STRING)))))
 
 (defun %make-column-vector (type)
   "this is probably a waste of time"
@@ -499,7 +509,6 @@ When archive-member is not-nil, treat that as the name of a file contained in th
 
 (defun %lisp-to-df-type (key obj)
   (let ((the-type (first (%ensure-list (type-of (cdr (assoc key obj)))))))
-
         (cdr (assoc the-type *lisp-to-df-types*))))
 
 (defun %infer-json-spec (json-obj)
@@ -520,7 +529,7 @@ When archive-member is not-nil, treat that as the name of a file contained in th
 			 
 			(vector-push-extend (cdr field ) (nth index columns))
 			
-		      collect t)))) ; a hack 
+		      collect nil)))) ; a hack 
 
 (defun %json-to-df (remote-file)
   "this is just a proof of concept and will barf pretty quickly on large inputs"
